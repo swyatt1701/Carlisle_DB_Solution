@@ -10,7 +10,7 @@ class FileConverterGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("File Converter")
-        self.root.geometry("500x525")  # Increased by ~25px for the note
+        self.root.geometry("500x500")  # Increased height to accommodate changes
         self.root.resizable(False, False)
         
         # Configure style
@@ -76,15 +76,15 @@ class FileConverterGUI:
         )
         select_btn.pack()
         
-        # File path display - with scrollbar, back to 2 lines
-        path_frame = tk.Frame(select_frame, bg='white', relief='sunken', borderwidth=1, height=40)
+        # File path display - doubled height with scrollbar
+        path_frame = tk.Frame(select_frame, bg='white', relief='sunken', borderwidth=1, height=80)
         path_frame.pack(fill='x', pady=(10, 0))
         path_frame.pack_propagate(False)  # Do not allow resizing
         
         # Text widget with scrollbar
         self.source_text = tk.Text(
             path_frame,
-            height=2,  # Back to 2 lines
+            height=4,  # Doubled from 2 to 4
             bg='white',
             fg='red',
             font=('Arial', 9),
@@ -263,18 +263,13 @@ class FileConverterGUI:
     def perform_conversion(self):
         """Perform the actual file conversion"""
         try:
-            self.log_status("Starting conversion...")
-            
             source = self.source_file.get()
             destination = self.dest_file.get()
             
             # Read the CenterPoint file
-            self.log_status("Reading CenterPoint file...")
             cp_df = pd.read_excel(source, header=None)
-            self.log_status(f"Loaded file: {cp_df.shape[0]} rows, {cp_df.shape[1]} columns")
             
             # Create new workbook matching TurningPoint structure
-            self.log_status("Creating TurningPoint format structure...")
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Check Register"
@@ -300,9 +295,6 @@ class FileConverterGUI:
                 if header:
                     ws.cell(row=8, column=col, value=header)
             
-            # Transform data
-            self.log_status("Converting data format...")
-            
             # Find data start row
             data_start_row = None
             for idx, row in cp_df.iterrows():
@@ -319,35 +311,60 @@ class FileConverterGUI:
             if data_start_row is None:
                 raise Exception("Could not find data start row in CenterPoint file")
             
-            self.log_status(f"Found data starting at row {data_start_row + 1}")
-            
             current_output_row = 11
             records_converted = 0
+            current_date = None  # Track the current date to carry forward
+            warnings = []  # Track missing data warnings
             
             for idx in range(data_start_row, len(cp_df)):
                 cp_row = cp_df.iloc[idx]
                 
                 # Skip empty rows or summary rows
-                if pd.isna(cp_row.iloc[3]):
+                if pd.isna(cp_row.iloc[3]) and pd.isna(cp_row.iloc[4]) and pd.isna(cp_row.iloc[6]):
                     continue
                 
                 # Extract CenterPoint data
-                transaction_date = cp_row.iloc[1] if pd.notna(cp_row.iloc[1]) else ""
-                check_number = str(cp_row.iloc[3]).strip() if pd.notna(cp_row.iloc[3]) else ""
-                account_number = str(cp_row.iloc[4]).strip() if pd.notna(cp_row.iloc[4]) else ""
+                row_date = cp_row.iloc[1] if pd.notna(cp_row.iloc[1]) else None
+                check_number = str(cp_row.iloc[3]).strip() if pd.notna(cp_row.iloc[3]) and str(cp_row.iloc[3]).strip() else ""
+                account_number = str(cp_row.iloc[4]).strip() if pd.notna(cp_row.iloc[4]) and str(cp_row.iloc[4]).strip() else ""
                 amount = cp_row.iloc[5] if pd.notna(cp_row.iloc[5]) else 0
-                vendor = str(cp_row.iloc[6]).strip() if pd.notna(cp_row.iloc[6]) else ""
+                vendor = str(cp_row.iloc[6]).strip() if pd.notna(cp_row.iloc[6]) and str(cp_row.iloc[6]).strip() else ""
                 
                 # Skip header rows or invalid data
-                if "Check" in check_number or "Number" in check_number or not check_number:
+                if "Check" in check_number or "Number" in check_number:
                     continue
                 
-                # Map to TurningPoint format
-                ws.cell(row=current_output_row, column=1, value=check_number)
+                # Check for missing critical data and create warnings
+                row_warnings = []
+                if not check_number:
+                    row_warnings.append("missing check number")
+                if not account_number:
+                    row_warnings.append("missing account number")
+                if not vendor:
+                    row_warnings.append("missing vendor name")
+                
+                # If we have warnings, record them with transaction details
+                if row_warnings:
+                    warning_msg = f"Row {idx + 1}: Transaction imported with {', '.join(row_warnings)}"
+                    if amount:
+                        warning_msg += f" (Amount: ${amount})"
+                    if check_number:
+                        warning_msg += f" (Check: {check_number})"
+                    warnings.append(warning_msg)
+                
+                # Update current_date if this row has a date, otherwise use the last known date
+                if row_date is not None:
+                    current_date = row_date
+                
+                # Use current_date for this transaction (never null)
+                transaction_date = current_date if current_date is not None else ""
+                
+                # Map to TurningPoint format (import even with missing data)
+                ws.cell(row=current_output_row, column=1, value=check_number if check_number else "")
                 ws.cell(row=current_output_row, column=3, value=transaction_date)
                 ws.cell(row=current_output_row, column=4, value="General")
                 ws.cell(row=current_output_row, column=5, value=vendor[:20] if vendor else "")
-                ws.cell(row=current_output_row, column=6, value=vendor)
+                ws.cell(row=current_output_row, column=6, value=vendor if vendor else "")
                 ws.cell(row=current_output_row, column=7, value="")
                 ws.cell(row=current_output_row, column=8, value=transaction_date)
                 ws.cell(row=current_output_row, column=9, value=amount)
@@ -356,7 +373,7 @@ class FileConverterGUI:
                 # Add account detail row
                 current_output_row += 1
                 ws.cell(row=current_output_row, column=3, value="Account:")
-                ws.cell(row=current_output_row, column=4, value=account_number)
+                ws.cell(row=current_output_row, column=4, value=account_number if account_number else "")
                 ws.cell(row=current_output_row, column=5, value="Amount:")
                 ws.cell(row=current_output_row, column=6, value=amount)
                 
@@ -364,26 +381,29 @@ class FileConverterGUI:
                 records_converted += 1
             
             # Save the file
-            self.log_status("Saving converted file...")
             wb.save(destination)
             
-            self.log_status(f"Conversion completed successfully!")
-            self.log_status(f"Records converted: {records_converted}")
-            self.log_status(f"File saved to: {os.path.basename(destination)}")
-            self.log_status("IMPORTANT: Rename file to 'EXPORT.xls' before importing to Access")
+            # Prepare success message with warnings
+            success_message = f"File converted successfully!\n\nRecords converted: {records_converted}\nFile saved as: {os.path.basename(destination)}\n\nThe file is ready to import into Access!"
             
-            messagebox.showinfo(
-                "Conversion Complete", 
-                f"File converted successfully!\n\n"
-                f"Records converted: {records_converted}\n"
-                f"File saved as: {os.path.basename(destination)}\n\n"
-                f"NEXT STEP:\n"
-                f"Rename the file to 'EXPORT.xls' before importing to Access"
-            )
+            if warnings:
+                warning_text = "\n\nWARNINGS - Manual data entry required:\n" + "\n".join(warnings)
+                success_message += warning_text
+                
+                # Show warnings in a separate dialog if there are many
+                if len(warnings) > 5:
+                    messagebox.showwarning(
+                        "Data Quality Warnings", 
+                        f"Conversion completed with {len(warnings)} warnings:\n\n" + 
+                        "\n".join(warnings[:5]) + 
+                        f"\n\n... and {len(warnings) - 5} more warnings.\n\n" +
+                        "Please review the converted file and manually enter missing data."
+                    )
+            
+            messagebox.showinfo("Conversion Complete", success_message)
             
         except Exception as e:
             error_msg = f"Conversion failed: {str(e)}"
-            self.log_status(error_msg)
             messagebox.showerror("Conversion Error", error_msg)
             
         finally:
